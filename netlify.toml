@@ -1,0 +1,16 @@
+# This file belongs in whatever Netlify treats as the *base directory* for
+# your backend site (taupe-lollipop-39f52b). If that site's "Base directory"
+# setting in Netlify is "server", leave this file right here. If it's the
+# repo root instead, move this file to the repo root and change
+# `functions = "netlify/functions"` to `functions = "server/netlify/functions"`.
+
+[build]
+  functions = "netlify/functions"
+
+# Netlify strips the "/.netlify/functions/api" prefix before invoking the
+# function, so a request to /api/progress arrives at the function as /progress.
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+  force = true
