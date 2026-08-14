@@ -10,6 +10,7 @@ const ALLOWED_ORIGINS = [
   "http://localhost:5174",
   // Production frontend — update this to your actual frontend URL
   process.env.FRONTEND_URL,
+  process.env.ADMIN_URL,
 ].filter(Boolean);
 
 // Builds the Express app. `prefix` lets the same app be mounted at "/api"
