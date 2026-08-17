@@ -1,5 +1,6 @@
 const express = require("express");
 const cors    = require("cors");
+const multer  = require("multer");
 
 const applicationsRouter = require("./routes/applications");
 const progressRouter     = require("./routes/progress");
@@ -43,6 +44,24 @@ function createApp({ prefix = "" } = {}) {
 
   // Health check
   app.get(`${prefix}/health`, (_req, res) => res.json({ ok: true }));
+
+  // Error-handling middleware — must be registered last, after all routes.
+  // Without this, errors thrown by multer (e.g. an unexpected file field, a
+  // file over the configured size limit) or anything else in a route bubble
+  // up to Express's default handler and come back as an opaque 500 with no
+  // useful message for the client.
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, _req, res, _next) => {
+    if (err instanceof multer.MulterError) {
+      console.error("Multer error:", err.code, err.message);
+      return res.status(400).json({ error: `Upload error: ${err.message}` });
+    }
+    if (err) {
+      console.error("Unhandled error:", err.message);
+      return res.status(500).json({ error: "Something went wrong. Please try again." });
+    }
+    return res.status(404).json({ error: "Not found." });
+  });
 
   return app;
 }
