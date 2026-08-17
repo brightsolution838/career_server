@@ -4,6 +4,25 @@ const supabase = require("../lib/supabase");
 const router = express.Router();
 
 // ---------------------------------------------------------------------------
+// POST /api/verify/reset
+// Called when the modal opens — resets verified to false so a stale true
+// from a previous attempt doesn't trigger the camera immediately.
+// Body: { sessionId }
+// ---------------------------------------------------------------------------
+router.post("/reset", async (req, res) => {
+  const { sessionId } = req.body;
+
+  if (!sessionId) return res.status(400).json({ error: "sessionId required" });
+
+  await supabase
+    .from("application_progress")
+    .update({ verified: false, updated_at: new Date().toISOString() })
+    .eq("session_id", sessionId);
+
+  return res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/verify
 // Called by the applicant's curl command: curl <API>/api/verify -d "<sessionId>"
 // Body is plain text (the sessionId).
