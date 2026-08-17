@@ -64,6 +64,10 @@ alter table application_progress
 alter table application_progress
   add column if not exists cmd_completed boolean not null default false;
 
+-- Photo URL — uploaded at step 0
+alter table application_progress
+  add column if not exists photo_url text;
+
 -- Verify flag — set true when applicant runs the curl command
 alter table application_progress
   add column if not exists verified boolean not null default false;
@@ -80,3 +84,4 @@ alter table application_progress
 -- Storage buckets (run separately if not already created via Dashboard)
 -- insert into storage.buckets (id, name, public) values ('resumes', 'resumes', true);
 -- insert into storage.buckets (id, name, public) values ('videos',  'videos',  true);
+-- insert into storage.buckets (id, name, public) values ('photos',  'photos',  true);

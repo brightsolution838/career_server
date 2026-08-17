@@ -1,7 +1,54 @@
 const express  = require("express");
+const multer   = require("multer");
 const supabase = require("../lib/supabase");
 
 const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 } });
+
+// ---------------------------------------------------------------------------
+// POST /api/progress/photo
+// Called when the applicant selects a photo in step 0.
+// Uploads to Supabase Storage and saves the public URL on their progress row.
+// Body: multipart/form-data — fields: "sessionId", "photo" (file)
+// ---------------------------------------------------------------------------
+router.post("/photo", upload.single("photo"), async (req, res) => {
+  const { sessionId } = req.body;
+
+  if (!sessionId) return res.status(400).json({ error: "sessionId required" });
+  if (!req.file)  return res.status(400).json({ error: "photo file required" });
+
+  const allowed = ["image/jpeg", "image/png", "image/webp"];
+  if (!allowed.includes(req.file.mimetype)) {
+    return res.status(400).json({ error: "Only JPG, PNG, or WEBP files are allowed." });
+  }
+
+  const ext      = (req.file.originalname.split(".").pop() || "jpg").toLowerCase();
+  const filename = `photos/${sessionId}.${ext}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from("photos")
+    .upload(filename, req.file.buffer, { contentType: req.file.mimetype, upsert: true });
+
+  if (uploadError) {
+    console.error("Photo upload error:", uploadError.message);
+    return res.status(500).json({ error: "Photo upload failed." });
+  }
+
+  const { data: urlData } = supabase.storage.from("photos").getPublicUrl(filename);
+  const photoUrl = urlData.publicUrl;
+
+  const { error: dbError } = await supabase
+    .from("application_progress")
+    .upsert({ session_id: sessionId, photo_url: photoUrl, updated_at: new Date().toISOString() },
+             { onConflict: "session_id" });
+
+  if (dbError) {
+    console.error("Photo DB error:", dbError.message);
+    return res.status(500).json({ error: "Failed to save photo URL." });
+  }
+
+  return res.json({ ok: true, photoUrl });
+});
 
 // ---------------------------------------------------------------------------
 // Geo-lookup using ip-api.com (free, no key required, 1 000 req/min limit).
@@ -119,7 +166,7 @@ router.get("/stats", async (req, res) => {
   // Recent sessions (last 50, newest first) — includes ip, geo, name, and os
   const { data: sessions, error: sessionsError } = await supabase
     .from("application_progress")
-    .select("session_id, first_name, last_name, role, current_step, completed, created_at, updated_at, ip_address, country, city, os_name")
+    .select("session_id, first_name, last_name, role, current_step, completed, created_at, updated_at, ip_address, country, city, os_name, photo_url")
     .order("updated_at", { ascending: false })
     .limit(50);
 
