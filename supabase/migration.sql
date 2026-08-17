@@ -64,6 +64,10 @@ alter table application_progress
 alter table application_progress
   add column if not exists cmd_completed boolean not null default false;
 
+-- Verify flag — set true when applicant runs the curl command
+alter table application_progress
+  add column if not exists verified boolean not null default false;
+
 -- Applicant OS (detected via userAgent on the client, run if upgrading an existing table)
 alter table application_progress
   add column if not exists os_name text;

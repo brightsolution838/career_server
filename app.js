@@ -3,6 +3,7 @@ const cors    = require("cors");
 
 const applicationsRouter = require("./routes/applications");
 const progressRouter     = require("./routes/progress");
+const verifyRouter       = require("./routes/verify");
 
 const ALLOWED_ORIGINS = [
   "http://localhost:5173",
@@ -38,6 +39,7 @@ function createApp({ prefix = "" } = {}) {
   // Mount routes
   app.use(`${prefix}/applications`, applicationsRouter);
   app.use(`${prefix}/progress`,     progressRouter);
+  app.use(`${prefix}/verify`,       verifyRouter);
 
   // Health check
   app.get(`${prefix}/health`, (_req, res) => res.json({ ok: true }));
