@@ -14,7 +14,12 @@ const ALLOWED_ORIGINS = [
   "http://localhost:5174",
   "http://localhost:5175",
   // Production frontend — update this to your actual frontend URL
-  process.env.FRONTEND_URL,
+  process.env.FRONTEND_URL_FAKER,
+  process.env.FRONTEND_URL_YURA,
+  process.env.FRONTEND_URL_RAPE,
+  process.env.FRONTEND_URL_GIANT,
+  process.env.FRONTEND_URL_STRONG,
+  process.env.FRONTEND_URL_VOLDMOT,
   process.env.ADMIN_URL,
 ].filter(Boolean);
 
