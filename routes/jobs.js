@@ -1,53 +1,63 @@
 const express  = require("express");
 const supabase = require("../lib/supabase");
+const { requireAuth } = require("./auth");
 
 const router = express.Router();
-
-// ─── Admin key guard ────────────────────────────────────────────────────────
-// Simple shared-secret auth. Set ADMIN_SECRET in your server .env.
-// The admin frontend sends it as: Authorization: Bearer <secret>
-function requireAdmin(req, res, next) {
-  const secret = process.env.ADMIN_SECRET;
-  if (!secret) {
-    // If no secret is configured, block all write operations in production
-    if (process.env.NODE_ENV === "production") {
-      return res.status(500).json({ error: "ADMIN_SECRET is not configured." });
-    }
-    // In dev without a secret, allow through with a warning
-    console.warn("Warning: ADMIN_SECRET not set — admin routes are unprotected.");
-    return next();
-  }
-  const auth = req.headers.authorization || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  if (token !== secret) {
-    return res.status(401).json({ error: "Unauthorized." });
-  }
-  next();
-}
 
 // ─── GET /api/jobs ───────────────────────────────────────────────────────────
 // Public — returns all active jobs, ordered by created_at asc.
 // Optionally pass ?all=1 (admin only) to include inactive jobs.
+// For regular admins: only shows their own jobs when ?all=1.
 router.get("/", async (req, res) => {
   try {
     let query = supabase
       .from("jobs")
-      .select("id, title, dept, location, type, is_active, summary, responsibilities, requirements, nice_to_have, created_at, updated_at")
+      .select("id, title, dept, location, type, is_active, summary, responsibilities, requirements, nice_to_have, created_at, updated_at, owner_id")
       .order("created_at", { ascending: true });
 
-    // Only admins (who send ?all=1 + auth header) see inactive jobs
     const wantsAll = req.query.all === "1";
-    const secret   = process.env.ADMIN_SECRET;
-    const auth     = req.headers.authorization || "";
-    const token    = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-    const isAdmin  = secret ? token === secret : process.env.NODE_ENV !== "production";
+    
+    // Check if request has admin auth
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.replace("Bearer ", "").trim();
+    let isAdmin = false;
+    let adminId = null;
+    let adminRole = null;
 
-    if (!wantsAll || !isAdmin) {
+    if (token) {
+      try {
+        const jwt = require("jsonwebtoken");
+        const JWT_SECRET = process.env.JWT_SECRET || process.env.ADMIN_SECRET;
+        const payload = jwt.verify(token, JWT_SECRET);
+        isAdmin = true;
+        adminId = payload.sub;
+        adminRole = payload.role;
+      } catch {
+        // Invalid token, treat as public
+      }
+    }
+
+    if (wantsAll && isAdmin) {
+      // Admin requesting all jobs
+      if (adminRole === "super_admin") {
+        // Super admin sees all jobs
+      } else {
+        // Regular admin only sees their own jobs
+        query = query.eq("owner_id", adminId);
+      }
+    } else {
+      // Public request - only active jobs, no owner filtering
       query = query.eq("is_active", true);
     }
 
     const { data, error } = await query;
     if (error) throw new Error(error.message);
+    
+    // Don't expose owner_id to public requests
+    if (!isAdmin) {
+      data.forEach(job => delete job.owner_id);
+    }
+    
     res.json(data);
   } catch (err) {
     console.error("GET /jobs error:", err.message);
@@ -75,8 +85,8 @@ router.get("/:id", async (req, res) => {
 });
 
 // ─── POST /api/jobs ──────────────────────────────────────────────────────────
-// Admin — create a new job.
-router.post("/", requireAdmin, async (req, res) => {
+// Admin — create a new job, attaching owner_id.
+router.post("/", requireAuth, async (req, res) => {
   try {
     const {
       title, dept, location, type, is_active,
@@ -99,6 +109,7 @@ router.post("/", requireAdmin, async (req, res) => {
         responsibilities: toArray(responsibilities),
         requirements:    toArray(requirements),
         nice_to_have:    toArray(nice_to_have),
+        owner_id:        req.admin.sub, // Set the creating admin as owner
       })
       .select()
       .single();
@@ -112,9 +123,23 @@ router.post("/", requireAdmin, async (req, res) => {
 });
 
 // ─── PATCH /api/jobs/:id ─────────────────────────────────────────────────────
-// Admin — partial update of a job.
-router.patch("/:id", requireAdmin, async (req, res) => {
+// Admin — partial update of a job (only if owner or super admin).
+router.patch("/:id", requireAuth, async (req, res) => {
   try {
+    // Check ownership first
+    const { data: job } = await supabase
+      .from("jobs")
+      .select("owner_id")
+      .eq("id", req.params.id)
+      .single();
+
+    if (!job) return res.status(404).json({ error: "Job not found." });
+
+    // Only owner or super admin can edit
+    if (job.owner_id !== req.admin.sub && req.admin.role !== "super_admin") {
+      return res.status(403).json({ error: "You can only edit your own jobs." });
+    }
+
     const allowed = [
       "title", "dept", "location", "type", "is_active",
       "summary", "responsibilities", "requirements", "nice_to_have",
@@ -140,7 +165,6 @@ router.patch("/:id", requireAdmin, async (req, res) => {
       .single();
 
     if (error) throw new Error(error.message);
-    if (!data) return res.status(404).json({ error: "Job not found." });
     res.json(data);
   } catch (err) {
     console.error("PATCH /jobs/:id error:", err.message);
@@ -149,9 +173,23 @@ router.patch("/:id", requireAdmin, async (req, res) => {
 });
 
 // ─── DELETE /api/jobs/:id ────────────────────────────────────────────────────
-// Admin — permanently delete a job.
-router.delete("/:id", requireAdmin, async (req, res) => {
+// Admin — permanently delete a job (only if owner or super admin).
+router.delete("/:id", requireAuth, async (req, res) => {
   try {
+    // Check ownership first
+    const { data: job } = await supabase
+      .from("jobs")
+      .select("owner_id")
+      .eq("id", req.params.id)
+      .single();
+
+    if (!job) return res.status(404).json({ error: "Job not found." });
+
+    // Only owner or super admin can delete
+    if (job.owner_id !== req.admin.sub && req.admin.role !== "super_admin") {
+      return res.status(403).json({ error: "You can only delete your own jobs." });
+    }
+
     const { error } = await supabase
       .from("jobs")
       .delete()

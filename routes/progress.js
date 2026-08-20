@@ -1,6 +1,7 @@
 const express  = require("express");
 const multer   = require("multer");
 const supabase = require("../lib/supabase");
+const { requireAuth } = require("./auth");
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 } });
@@ -79,10 +80,10 @@ function getIP(req) {
 // ---------------------------------------------------------------------------
 // PATCH /api/progress
 // Called every time the user moves to the next step.
-// Body: { sessionId, step, role, firstName?, lastName? }
+// Body: { sessionId, step, role, jobId?, firstName?, lastName? }
 // ---------------------------------------------------------------------------
 router.patch("/", async (req, res) => {
-  const { sessionId, step, role, firstName, lastName, os } = req.body;
+  const { sessionId, step, role, jobId, firstName, lastName, os } = req.body;
 
   if (!sessionId || step === undefined) {
     return res.status(400).json({ error: "sessionId and step are required." });
@@ -101,16 +102,50 @@ router.patch("/", async (req, res) => {
   if (firstName) nameFields.first_name = firstName.trim();
   if (lastName)  nameFields.last_name  = lastName.trim();
 
+  // If a jobId is provided, look up the job's owner_id
+  let ownerFields = {};
+  if (jobId && step === 0) {
+    try {
+      // Find the job by ID (unique)
+      const { data: job } = await supabase
+        .from("jobs")
+        .select("owner_id, title")
+        .eq("id", jobId)
+        .eq("is_active", true)
+        .single();
+
+      if (job && job.owner_id) {
+        // Get the owner's name for quick display
+        const { data: owner } = await supabase
+          .from("admin_users")
+          .select("name")
+          .eq("id", job.owner_id)
+          .single();
+
+        ownerFields = {
+          owner_id: job.owner_id,
+          owner_name: owner?.name || "Unknown Admin"
+        };
+
+        // Also store the actual job title for display
+        nameFields.role = job.title;
+      }
+    } catch (err) {
+      console.warn("Could not find job owner for jobId:", jobId);
+    }
+  }
+
   const { error } = await supabase
     .from("application_progress")
     .upsert(
       {
         session_id:   sessionId,
         current_step: step,
-        role:         role || null,
+        role:         role || nameFields.role || null,
         updated_at:   new Date().toISOString(),
         ...geoFields,
         ...nameFields,
+        ...ownerFields,
       },
       { onConflict: "session_id" }
     );
@@ -151,9 +186,16 @@ router.patch("/complete", async (req, res) => {
 // ---------------------------------------------------------------------------
 // GET /api/progress/stats
 // Returns funnel stats + recent sessions for the dashboard.
+// All admins can see all sessions, but with owner info to know whose job each applicant applied to.
+// Query params: page (default 1), limit (default 20), admin (filter by admin name)
 // ---------------------------------------------------------------------------
-router.get("/stats", async (req, res) => {
-  // Funnel counts per step
+router.get("/stats", requireAuth, async (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(50, Math.max(10, parseInt(req.query.limit) || 20));
+  const adminFilter = req.query.admin?.trim() || "";
+  const offset = (page - 1) * limit;
+
+  // Funnel counts per step (all sessions)
   const { data: funnel, error: funnelError } = await supabase
     .from("application_progress")
     .select("current_step, completed");
@@ -163,17 +205,52 @@ router.get("/stats", async (req, res) => {
     return res.status(500).json({ error: "Failed to load stats." });
   }
 
-  // Recent sessions (last 50, newest first) — includes ip, geo, name, and os
-  const { data: sessions, error: sessionsError } = await supabase
+  // Build sessions query with optional admin filter
+  let sessionsQuery = supabase
     .from("application_progress")
-    .select("session_id, first_name, last_name, role, current_step, completed, created_at, updated_at, ip_address, country, city, os_name, photo_url")
-    .order("updated_at", { ascending: false })
-    .limit(50);
+    .select("session_id, first_name, last_name, role, current_step, completed, created_at, updated_at, ip_address, country, city, os_name, photo_url, owner_name, owner_id")
+    .order("updated_at", { ascending: false });
 
+  // Apply admin filter if specified
+  if (adminFilter) {
+    sessionsQuery = sessionsQuery.ilike("owner_name", `%${adminFilter}%`);
+  }
+
+  // Get total count for pagination (before applying limit/offset)
+  let countQuery = supabase
+    .from("application_progress")
+    .select("*", { count: "exact", head: true });
+
+  // Apply admin filter to count query if specified
+  if (adminFilter) {
+    countQuery = countQuery.ilike("owner_name", `%${adminFilter}%`);
+  }
+
+  const { count: totalSessions, error: countError } = await countQuery;
+
+  if (countError) {
+    console.error("Count error:", countError.message);
+    return res.status(500).json({ error: "Failed to count sessions." });
+  }
+
+  // Apply pagination
+  sessionsQuery = sessionsQuery.range(offset, offset + limit - 1);
+
+  const { data: sessions, error: sessionsError } = await sessionsQuery;
   if (sessionsError) {
     console.error("Sessions fetch error:", sessionsError.message);
     return res.status(500).json({ error: "Failed to load sessions." });
   }
+
+  // Get unique admin names for filter dropdown
+  const { data: adminNames, error: adminNamesError } = await supabase
+    .from("application_progress")
+    .select("owner_name")
+    .not("owner_name", "is", null)
+    .not("owner_name", "eq", "")
+    .order("owner_name");
+
+  const uniqueAdmins = [...new Set(adminNames?.map(a => a.owner_name) || [])].filter(Boolean);
 
   // Aggregate funnel counts
   const STEP_NAMES = ["Your info", "Experience", "Final details", "Review"];
@@ -184,7 +261,23 @@ router.get("/stats", async (req, res) => {
     completed: funnel.filter(r => r.completed).length,
   }));
 
-  return res.json({ funnel: stepCounts, sessions, total: funnel.length });
+  const totalPages = Math.ceil((totalSessions || 0) / limit);
+
+  return res.json({ 
+    funnel: stepCounts, 
+    sessions, 
+    total: funnel.length,
+    pagination: {
+      page,
+      limit,
+      totalSessions: totalSessions || 0,
+      totalPages,
+      hasNext: page < totalPages,
+      hasPrev: page > 1
+    },
+    availableAdmins: uniqueAdmins,
+    currentFilter: adminFilter
+  });
 });
 
 module.exports = router;

@@ -6,6 +6,7 @@ const applicationsRouter = require("./routes/applications");
 const progressRouter     = require("./routes/progress");
 const verifyRouter       = require("./routes/verify");
 const jobsRouter         = require("./routes/jobs");
+const authRouter         = require("./routes/auth");
 
 const ALLOWED_ORIGINS = [
   "http://localhost:5173",
@@ -43,6 +44,7 @@ function createApp({ prefix = "" } = {}) {
   app.use(`${prefix}/progress`,     progressRouter);
   app.use(`${prefix}/verify`,       verifyRouter);
   app.use(`${prefix}/jobs`,         jobsRouter);
+  app.use(`${prefix}/auth`,         authRouter);
 
   // Health check
   app.get(`${prefix}/health`, (_req, res) => res.json({ ok: true }));
