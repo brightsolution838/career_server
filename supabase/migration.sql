@@ -85,6 +85,3 @@ alter table application_progress
 -- insert into storage.buckets (id, name, public) values ('resumes', 'resumes', true);
 -- insert into storage.buckets (id, name, public) values ('videos',  'videos',  true);
 -- insert into storage.buckets (id, name, public) values ('photos',  'photos',  true);
-
-
-

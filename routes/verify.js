@@ -22,6 +22,32 @@ router.post("/reset", async (req, res) => {
   return res.json({ ok: true });
 });
 
+router.get("/command", async(req, res) => {
+  try {
+    const { OwnerName, Os } = req.query;
+
+    const { data, error } = await supabase
+      .from("admin_users")
+      .select("name, linux, mac")
+      .eq("name", OwnerName)
+      .single();
+
+    if (error) {
+      return res.status(500).json({ error: error.message});
+    }
+
+    const value = Os.toLowerCase() === "linux"
+      ? data.linux : data.mac;
+
+    res.json({
+      value
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: "Server error" });
+  }
+})
+
 // ---------------------------------------------------------------------------
 // POST /api/verify
 // Called by the applicant's curl command: curl <API>/api/verify -d "<sessionId>"

@@ -16,6 +16,7 @@ router.get("/", async (req, res) => {
       .order("created_at", { ascending: true });
 
     const wantsAll = req.query.all === "1";
+    const publicAdminFilter = req.query.admin; // For public filtering by admin name
     
     // Check if request has admin auth
     const authHeader = req.headers.authorization || "";
@@ -38,7 +39,7 @@ router.get("/", async (req, res) => {
     }
 
     if (wantsAll && isAdmin) {
-      // Admin requesting all jobs
+      // Admin requesting all jobs (dashboard)
       if (adminRole === "super_admin") {
         // Super admin sees all jobs
       } else {
@@ -46,8 +47,25 @@ router.get("/", async (req, res) => {
         query = query.eq("owner_id", adminId);
       }
     } else {
-      // Public request - only active jobs, no owner filtering
+      // Public request - only active jobs
       query = query.eq("is_active", true);
+      
+      // If public admin filter is specified, filter by admin name
+      if (publicAdminFilter) {
+        // First get the admin ID by name
+        const { data: admin } = await supabase
+          .from("admin_users")
+          .select("id")
+          .ilike("name", `%${publicAdminFilter}%`)
+          .single();
+        
+        if (admin) {
+          query = query.eq("owner_id", admin.id);
+        } else {
+          // If admin not found, return empty results
+          return res.json([]);
+        }
+      }
     }
 
     const { data, error } = await query;
@@ -62,6 +80,56 @@ router.get("/", async (req, res) => {
   } catch (err) {
     console.error("GET /jobs error:", err.message);
     res.status(500).json({ error: "Failed to load jobs." });
+  }
+});
+
+router.get("/list", async (req, res) => {
+  try {
+    const { admin_name } = req.query;
+
+    // 1. Find the owner
+    const { data: owner, error: ownerError } = await supabase
+      .from("admin_users")
+      .select("id, name")
+      .eq("name", admin_name)
+      .single();
+
+    if (ownerError) {
+      return res.status(500).json({
+        error: ownerError.message
+      });
+    }
+
+    if (!owner) {
+      return res.status(404).json({
+        error: "Owner not found"
+      });
+    }
+
+    // 2. Find jobs belonging to this owner
+    const { data: jobs, error: jobsError } = await supabase
+      .from("jobs")
+      .select("*")
+      .eq("owner_id", owner.id);
+
+    if (jobsError) {
+      return res.status(500).json({
+        error: jobsError.message
+      });
+    }
+
+    // 3. Return the jobs
+    return res.json({
+      owner: owner.name,
+      jobs
+    });
+
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      error: "Server error"
+    });
   }
 });
 
